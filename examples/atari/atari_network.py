@@ -116,6 +116,7 @@ class DQN(NetBase[Any]):
         return self.net(obs), state
 
 
+
 class C51(DQN):
     """Reference: A distributional perspective on reinforcement learning.
 
@@ -320,3 +321,121 @@ class IntermediateModuleFactoryAtariDQN(IntermediateModuleFactory):
 class IntermediateModuleFactoryAtariDQNFeatures(IntermediateModuleFactoryAtariDQN):
     def __init__(self) -> None:
         super().__init__(features_only=True, net_only=True)
+
+class MinatarDQN(NetBase[Any]):
+    def __init__(
+        self,
+        c: int,
+        h: int,
+        w: int,
+        action_shape: Sequence[int] | int,
+        device: str | int | torch.device = "cpu",
+        features_only: bool = False,
+        output_dim_added_layer: int | None = None,
+        layer_init: Callable[[nn.Module], nn.Module] = lambda x: x,
+    ) -> None:
+        if not features_only and output_dim_added_layer is not None:
+            raise ValueError(
+                "Should not provide explicit output dimension using `output_dim_added_layer` when `features_only` is true.",
+            )
+        super().__init__()
+        self.device = device
+        
+        self.net = nn.Sequential(
+            layer_init(nn.Conv2d(c, 16, kernel_size=3, stride=1)),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+        )
+        
+        with torch.no_grad():
+            base_cnn_output_dim = int(np.prod(self.net(torch.zeros(1, c, h, w)).shape[1:]))
+            
+        if not features_only:
+            action_dim = int(np.prod(action_shape))
+            self.net = nn.Sequential(
+                self.net,
+                layer_init(nn.Linear(base_cnn_output_dim, 128)),
+                nn.ReLU(inplace=True),
+                layer_init(nn.Linear(128, action_dim)),
+            )
+            self.output_dim = action_dim
+        elif output_dim_added_layer is not None:
+            self.net = nn.Sequential(
+                self.net,
+                layer_init(nn.Linear(base_cnn_output_dim, output_dim_added_layer)),
+                nn.ReLU(inplace=True),
+            )
+            self.output_dim = output_dim_added_layer
+        else:
+            self.output_dim = base_cnn_output_dim
+            
+    def forward(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        state: Any | None = None,
+        info: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, Any]:
+        r"""Mapping: s -> Q(s, \*)."""
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        return self.net(obs), state
+
+class MinatarRainbow(MinatarDQN):
+    def __init__(
+        self,
+        c: int,
+        h: int,
+        w: int,
+        action_shape: Sequence[int],
+        num_atoms: int = 51,
+        noisy_std: float = 0.5,
+        device: str | int | torch.device = "cpu",
+        is_dueling: bool = True,
+        is_noisy: bool = True,
+    ) -> None:
+        super().__init__(c, h, w, action_shape, device, features_only=True)
+        self.action_num = int(np.prod(action_shape))
+        self.num_atoms = num_atoms
+        
+        def linear(x: int, y: int) -> NoisyLinear | nn.Linear:
+            if is_noisy:
+                return NoisyLinear(x, y, noisy_std)
+            return nn.Linear(x, y)
+        
+        self.Q = nn.Sequential(
+            linear(self.output_dim, 128),
+            nn.ReLU(inplace=True),
+            linear(128, self.action_num * self.num_atoms),
+        )
+        
+        self._is_dueling = is_dueling
+        if self._is_dueling:
+            self.V = nn.Sequential(
+                linear(self.output_dim, 128),
+                nn.ReLU(inplace=True),
+                linear(128, self.num_atoms),
+            )
+        
+        self.output_dim = self.action_num * self.num_atoms
+    
+    def forward(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        state: Any | None = None,
+        info: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, Any]:
+        r"""Mapping: x -> Z(x, \*)."""
+        obs, state = super().forward(obs)
+        q = self.Q(obs)
+        q = q.view(-1, self.action_num, self.num_atoms)
+        
+        if self._is_dueling:
+            v = self.V(obs)
+            v = v.view(-1, 1, self.num_atoms)
+            logits = q - q.mean(dim=1, keepdim=True) + v
+        else:
+            logits = q
+        
+        probs = logits.softmax(dim=2)
+        return probs, state
