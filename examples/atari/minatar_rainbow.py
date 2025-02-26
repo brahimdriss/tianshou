@@ -114,6 +114,11 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
     #     scale=args.scale_obs,
     #     frame_stack=args.frames_stack,
     # )
+    if "MinAtar" in args.task:
+        args.frames_stack = 1
+        args.save_only_last_obs = False
+        args.ignore_obs_next = False
+
     env = ChannelFirstWrapper(gym.make(args.task))
     assert isinstance(env.action_space, gym.spaces.Discrete)
     space_info = SpaceInfo.from_env(env)
@@ -181,8 +186,8 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
         buffer = PrioritizedVectorReplayBuffer(
             args.buffer_size,
             buffer_num=len(train_envs),
-            ignore_obs_next=True,
-            save_only_last_obs=True,
+            ignore_obs_next=args.ignore_obs_next,
+            save_only_last_obs=args.save_only_last_obs,
             stack_num=args.frames_stack,
             alpha=args.alpha,
             beta=args.beta,
