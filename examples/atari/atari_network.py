@@ -439,3 +439,144 @@ class MinatarRainbow(MinatarDQN):
         
         probs = logits.softmax(dim=2)
         return probs, state
+
+class MujocoDQN(NetBase[Any]):
+    def __init__(
+        self,
+        state_shape: Sequence[int] | int,
+        action_shape: Sequence[int] | int,
+        device: str | int | torch.device = "cpu",
+        features_only: bool = False,
+        output_dim_added_layer: int | None = None,
+        layer_init_fn: Callable[[nn.Module], nn.Module] = layer_init,
+    ) -> None:
+        if not features_only and output_dim_added_layer is not None:
+            raise ValueError(
+                "Should not provide explicit output dimension using `output_dim_added_layer` when `features_only` is false.",
+            )
+        super().__init__()
+        self.device = device
+
+        if isinstance(state_shape, int):
+            state_dim = state_shape
+        else:
+            state_dim = int(np.prod(state_shape))
+        
+        self.net = nn.Sequential(
+            layer_init_fn(nn.Linear(state_dim, 256)),
+            nn.ReLU(inplace=True),
+            layer_init_fn(nn.Linear(256, 256)),
+            nn.ReLU(inplace=True),
+        )
+        
+        if not features_only:
+            if isinstance(action_shape, int):
+                action_dim = action_shape
+            else:
+                action_dim = int(np.prod(action_shape))
+                
+            self.net = nn.Sequential(
+                self.net,
+                layer_init_fn(nn.Linear(256, action_dim)),
+            )
+            self.output_dim = action_dim
+        elif output_dim_added_layer is not None:
+            self.net = nn.Sequential(
+                self.net,
+                layer_init_fn(nn.Linear(256, output_dim_added_layer)),
+                nn.ReLU(inplace=True),
+            )
+            self.output_dim = output_dim_added_layer
+        else:
+            self.output_dim = 256
+            
+    def forward(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        state: Any | None = None,
+        info: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, Any]:
+        """Mapping: s -> Q(s, *)."""
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        return self.net(obs), state
+
+
+class MujocoRainbow(NetBase[Any]):
+    def __init__(
+        self,
+        state_shape: Sequence[int] | int,
+        action_shape: Sequence[int] | int,
+        num_atoms: int = 51,
+        noisy_std: float = 0.5,
+        device: str | int | torch.device = "cpu",
+        is_dueling: bool = True,
+        is_noisy: bool = True,
+    ) -> None:
+        super().__init__()
+        self.device = device
+        
+        if isinstance(state_shape, int):
+            state_dim = state_shape
+        else:
+            state_dim = int(np.prod(state_shape))
+            
+        if isinstance(action_shape, int):
+            self.action_num = action_shape
+        else:
+            self.action_num = int(np.prod(action_shape))
+            
+        self.num_atoms = num_atoms
+        
+        self.feature_net = nn.Sequential(
+            layer_init(nn.Linear(state_dim, 256)),
+            nn.ReLU(inplace=True),
+            layer_init(nn.Linear(256, 256)),
+            nn.ReLU(inplace=True),
+        )
+        
+        def linear(x: int, y: int) -> NoisyLinear | nn.Linear:
+            if is_noisy:
+                return NoisyLinear(x, y, noisy_std)
+            return layer_init(nn.Linear(x, y))
+        
+        self.Q = nn.Sequential(
+            linear(256, 256),
+            nn.ReLU(inplace=True),
+            linear(256, self.action_num * self.num_atoms),
+        )
+        
+        self._is_dueling = is_dueling
+        if self._is_dueling:
+            self.V = nn.Sequential(
+                linear(256, 256),
+                nn.ReLU(inplace=True),
+                linear(256, self.num_atoms),
+            )
+        
+        self.output_dim = self.action_num * self.num_atoms
+    
+    def forward(
+        self,
+        obs: np.ndarray | torch.Tensor,
+        state: Any | None = None,
+        info: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> tuple[torch.Tensor, Any]:
+        """Mapping: x -> Z(x, *)."""
+        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
+        
+        feature = self.feature_net(obs)
+        
+        q = self.Q(feature)
+        q = q.view(-1, self.action_num, self.num_atoms)
+        
+        if self._is_dueling:
+            v = self.V(feature)
+            v = v.view(-1, 1, self.num_atoms)
+            logits = q - q.mean(dim=1, keepdim=True) + v
+        else:
+            logits = q
+        
+        probs = logits.softmax(dim=2)
+        return probs, state
