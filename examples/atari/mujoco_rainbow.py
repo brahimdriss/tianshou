@@ -21,8 +21,10 @@ from tianshou.policy.base import BasePolicy
 from tianshou.trainer import OffpolicyTrainer
 
 import gymnasium as gym
+from gymnasium.wrappers import TimeLimit
 from tianshou.utils.space_info import SpaceInfo
 from tianshou.env import DummyVectorEnv, SubprocVectorEnv
+
 
 class ContToDiscreteActWrap(gym.ActionWrapper):
     def __init__(self, env):
@@ -71,6 +73,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--training-num", type=int, default=10)
     parser.add_argument("--test-num", type=int, default=10)
     parser.add_argument("--logdir", type=str, default="log")
+    parser.add_argument("--net-size", type=int, default=128)
     parser.add_argument("--render", type=float, default=0.0)
     parser.add_argument(
         "--device",
@@ -102,6 +105,11 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
     args.save_only_last_obs = False
     args.ignore_obs_next = False
 
+    def create_env(task):
+        env = ContToDiscreteActWrap(gym.make(task))
+        env = TimeLimit(env, max_episode_steps=5000)
+        return env
+
     env = ContToDiscreteActWrap(gym.make(args.task))
     assert isinstance(env.action_space, gym.spaces.Discrete)
     space_info = SpaceInfo.from_env(env)
@@ -110,9 +118,9 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
     args.max_action = space_info.action_info.max_action
     # train_envs = gym.make(args.task)
     # you can also use tianshou.env.SubprocVectorEnv
-    train_envs = DummyVectorEnv([lambda: ContToDiscreteActWrap(gym.make(args.task)) for _ in range(args.training_num)])
+    train_envs = DummyVectorEnv([lambda: create_env(args.task) for _ in range(args.training_num)])
     # test_envs = gym.make(args.task)
-    test_envs = SubprocVectorEnv([lambda: ContToDiscreteActWrap(gym.make(args.task)) for _ in range(args.test_num)])
+    test_envs = SubprocVectorEnv([lambda: create_env(args.task) for _ in range(args.test_num)])
     # seed
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -134,6 +142,7 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
         args.num_atoms,
         args.noisy_std,
         args.device,
+        args.net_size,
         is_dueling=not args.no_dueling,
         is_noisy=not args.no_noisy,
     )

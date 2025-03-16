@@ -510,6 +510,7 @@ class MujocoRainbow(NetBase[Any]):
         num_atoms: int = 51,
         noisy_std: float = 0.5,
         device: str | int | torch.device = "cpu",
+        net_size: int = 128,
         is_dueling: bool = True,
         is_noisy: bool = True,
     ) -> None:
@@ -529,9 +530,9 @@ class MujocoRainbow(NetBase[Any]):
         self.num_atoms = num_atoms
         
         self.feature_net = nn.Sequential(
-            layer_init(nn.Linear(state_dim, 256)),
+            layer_init(nn.Linear(state_dim, net_size)),
             nn.ReLU(inplace=True),
-            layer_init(nn.Linear(256, 256)),
+            layer_init(nn.Linear(net_size, net_size)),
             nn.ReLU(inplace=True),
         )
         
@@ -541,17 +542,17 @@ class MujocoRainbow(NetBase[Any]):
             return layer_init(nn.Linear(x, y))
         
         self.Q = nn.Sequential(
-            linear(256, 256),
+            linear(net_size, net_size),
             nn.ReLU(inplace=True),
-            linear(256, self.action_num * self.num_atoms),
+            linear(net_size, self.action_num * self.num_atoms),
         )
         
         self._is_dueling = is_dueling
         if self._is_dueling:
             self.V = nn.Sequential(
-                linear(256, 256),
+                linear(net_size, net_size),
                 nn.ReLU(inplace=True),
-                linear(256, self.num_atoms),
+                linear(net_size, self.num_atoms),
             )
         
         self.output_dim = self.action_num * self.num_atoms
