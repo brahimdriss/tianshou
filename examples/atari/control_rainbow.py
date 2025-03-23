@@ -200,10 +200,6 @@ def test_rainbow(args: argparse.Namespace = get_args()) -> None:
         torch.save(policy.state_dict(), os.path.join(log_path, "policy.pth"))
 
     def stop_fn(mean_rewards: float) -> bool:
-        if env.spec.reward_threshold:
-            return mean_rewards >= env.spec.reward_threshold
-        if "Pong" in args.task:
-            return mean_rewards >= 20
         return False
 
     def train_fn(epoch: int, env_step: int) -> None:
